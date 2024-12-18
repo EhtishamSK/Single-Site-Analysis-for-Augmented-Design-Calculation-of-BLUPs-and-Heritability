@@ -1,0 +1,111 @@
+
+setwd("C:/Users/ehtis/OneDrive - New Mexico State University/SUNNY/Research Projects/Mechanical Harvest Projects/Genomic Prediction/BLUP")
+mydata <- read.csv("mydata.csv")
+
+
+str(mydata)
+print(mydata)
+
+mydata$Block <- as.factor(mydata$Block)
+mydata$Genotype <- as.factor(mydata$Genotype)
+mydata$row <- as.factor(mydata$row)
+mydata$column <- as.factor(mydata$column)
+
+mydata$Perimeter <- as.numeric(mydata$Perimeter)
+mydata$Area <- as.numeric(mydata$Area)
+mydata$Width.Mid.height <- as.numeric(mydata$Width.Mid.height)
+mydata$Height.Mid.width <- as.numeric(mydata$Height.Mid.width)
+mydata$Maximum.Height <- as.numeric(mydata$Maximum.Height)
+mydata$Maximum.Width <- as.numeric(mydata$Maximum.Width)
+
+
+
+length(unique(mydata$Genotype)) # number of Genotypes
+length(levels(mydata$Block)) # number of blocks
+length(levels(mydata$row)) # number of rows
+length(levels(mydata$column)) # number of columns 
+
+summary(mydata)
+colnames(mydata)
+
+mydata$check <- dplyr::recode_factor(mydata$Genotype, 
+                                     "CHECK1" = "control", 
+                                     "CHECK2" = "control", 
+                                     "CHECK3" = "control",
+                                     .default = "test")
+
+unique(mydata$check)
+
+# Check the completeness of the grid. Every RxC should have a value or NA if missing 
+table(mydata$row, mydata$column)  
+
+library(asreml)
+
+# MODELS WIHTOUT ROWS ANS COLUMNS 
+
+# Model for fixed effects = BLUPs 
+model <- asreml::asreml(fixed = Perimeter ~ 1 + at(check, "control"),
+                        random = ~ Genotype + Block + at(check, "test"):Genotype,
+                        residual = ~ idv(units),
+                        data = mydata,
+                        na.action = list(x = "include", y = "include"))
+
+
+plot(model)
+summary(model)
+summary(model)$varcomp
+
+# heritability
+vg <- vpredict(model, VG ~ V2)
+h2 <- vpredict(model, h2 ~ V2 / (V1 + V2 + V3 + V4))
+print(h2)
+
+# BLUE for genotypes 
+predsTest <- predict.asreml(model, classify='check:Genotype',  levels = list(check = "test"), vcov=TRUE)$pvals
+print(predsTest)
+colnames(predsTest) <- c("check", "Genotype", "BLUP", "std.error", "status")
+
+write.csv(predsTest, "BLUP_Perimeter.csv", row.names = FALSE)
+
+# Extract numeric trait columns dynamically
+numeric_traits <- names(mydata)[sapply(mydata, is.numeric)]
+numeric_traits <- numeric_traits[!numeric_traits %in% c("row", "column")]  # Exclude row and column if present
+
+# Initialize data frames to store results
+heritability_results <- data.frame(Trait = character(), Heritability = numeric(), stringsAsFactors = FALSE)
+blup_results <- data.frame(Trait = character(), Check = character(), Genotype = character(), BLUP = numeric(), StdError = numeric(), Status = character(), stringsAsFactors = FALSE)
+
+# Loop over each numeric trait
+for (trait in numeric_traits) {
+  
+  # Fit the model for the current trait
+  model <- asreml::asreml(fixed = as.formula(paste(trait, "~ 1 + at(check, 'control')")),
+                          random = ~ Genotype + Block + at(check, "test"):Genotype,
+                          residual = ~ idv(units),
+                          data = mydata,
+                          na.action = list(x = "include", y = "include"))
+  
+  # Calculate heritability
+  vg <- vpredict(model, VG ~ V2)  # Genetic variance (V2)
+  h2 <- vpredict(model, h2 ~ V2 / (V1 + V2 + V3 + V4))  # Narrow-sense heritability
+  
+  # Store heritability result
+  heritability_results <- rbind(heritability_results, data.frame(Trait = trait, Heritability = h2))
+  
+  # Predict BLUPs for genotypes at the 'test' level
+  predsTest <- predict.asreml(model, classify = 'check:Genotype', levels = list(check = "test"), vcov = TRUE)$pvals
+  
+  # Add columns for the trait and organize the BLUP results
+  predsTest$Trait <- trait
+  colnames(predsTest) <- c("check", "Genotype", "BLUP", "std.error", "status", "Trait")
+  
+  # Store BLUP results
+  blup_results <- rbind(blup_results, predsTest)
+}
+
+# Write heritability results to a CSV file
+write.csv(heritability_results, "Heritability_BLUP.csv", row.names = FALSE)
+
+# Write BLUP results to a CSV file
+write.csv(blup_results, "BLUP_Results.csv", row.names = FALSE)
+
